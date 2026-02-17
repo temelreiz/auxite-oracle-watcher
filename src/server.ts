@@ -17,6 +17,7 @@ import {
   setOverridePrices,
   clearOverridePrices,
   getErrorCount,
+  resetErrorCount,
   getPriceHistory,
 } from './services/redis-state';
 import { readOraclePrices } from './services/oracle-reader';
@@ -210,7 +211,14 @@ app.post('/admin/kill-switch', requireAuth, async (req, res) => {
     }
 
     await setKillSwitch(active);
-    logger.info({ active }, 'Kill switch toggled via admin API');
+
+    // If disabling kill switch, also reset error count
+    if (!active) {
+      await resetErrorCount();
+      logger.info('Kill switch disabled + error count reset via admin API');
+    } else {
+      logger.info('Kill switch enabled via admin API');
+    }
 
     res.json({ success: true, killSwitch: active });
   } catch (error: any) {
@@ -226,7 +234,7 @@ app.post('/admin/override', requireAuth, async (req, res) => {
     const { prices, expiresInMinutes } = req.body;
 
     if (!prices || !prices.gold || !prices.silver || !prices.platinum || !prices.palladium) {
-      res.status(400).json({ error: 'prices { gold, silver, platinum, palladium } required ($/gram)' });
+      res.status(400).json({ error: 'prices { gold, silver, platinum, palladium } required ($/oz)' });
       return;
     }
 

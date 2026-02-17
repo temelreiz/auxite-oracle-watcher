@@ -1,6 +1,6 @@
 /**
  * Oracle Reader — reads current on-chain prices from AuxiteMetalOracleV2
- * Uses getAllPrices() which returns E6 format ($/oz * 1e6)
+ * Uses getAllPricesOzE6() which returns E6 format ($/oz * 1e6)
  */
 
 import { ethers } from 'ethers';
@@ -8,11 +8,11 @@ import { CONFIG } from '../config';
 import { logger } from '../utils/logger';
 import type { MetalPrices } from '../types';
 
-export async function readOraclePrices(): Promise<MetalPrices & { ethUsd: number; lastUpdated: number }> {
+export async function readOraclePrices(): Promise<MetalPrices & { ethUsd: number }> {
   const provider = new ethers.JsonRpcProvider(CONFIG.rpcUrl);
   const oracle = new ethers.Contract(CONFIG.oracleAddress, CONFIG.oracleAbi, provider);
 
-  const [goldE6, silverE6, platinumE6, palladiumE6, ethE6, lastUpdated] = await oracle.getAllPrices();
+  const [goldE6, silverE6, platinumE6, palladiumE6, ethE6] = await oracle.getAllPricesOzE6();
 
   // E6 format: price_in_usd * 1e6, so divide by 1e6 to get $/oz
   const fromE6 = (val: bigint) => Number(val) / 1_000_000;
@@ -23,7 +23,6 @@ export async function readOraclePrices(): Promise<MetalPrices & { ethUsd: number
     platinum: fromE6(platinumE6),
     palladium: fromE6(palladiumE6),
     ethUsd: fromE6(ethE6),
-    lastUpdated: Number(lastUpdated),
   };
 
   logger.debug({

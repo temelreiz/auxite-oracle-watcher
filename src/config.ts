@@ -32,8 +32,8 @@ export const CONFIG = {
 
   // ── Oracle Contract ABI (AuxiteMetalOracleV2) ──
   oracleAbi: [
-    'function setAllPrices(uint256 _goldPrice, uint256 _silverPrice, uint256 _platinumPrice, uint256 _palladiumPrice, uint256 _ethPrice) external',
-    'function getAllPrices() external view returns (uint256 goldPrice, uint256 silverPrice, uint256 platinumPrice, uint256 palladiumPrice, uint256 ethPrice, uint256 lastUpdated)',
+    'function setAllPrices(uint256 auxgOzE6, uint256 auxsOzE6, uint256 auxptOzE6, uint256 auxpdOzE6, uint256 ethPriceE6) external',
+    'function getAllPricesOzE6() external view returns (uint256 auxgOzE6, uint256 auxsOzE6, uint256 auxptOzE6, uint256 auxpdOzE6, uint256 ethE6)',
   ],
 
   // ── Metal symbol mapping ──
