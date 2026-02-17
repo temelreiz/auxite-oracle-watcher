@@ -43,7 +43,7 @@ async function fetchFromGoldApi(): Promise<{ prices: MetalPrices; pricesOz: Meta
       throw new Error(`GoldAPI ${symbol}: HTTP ${res.status}`);
     }
 
-    const data = await res.json();
+    const data = await res.json() as { price?: number };
     if (!data.price || data.price <= 0) {
       throw new Error(`GoldAPI ${symbol}: invalid price ${data.price}`);
     }
