@@ -70,7 +70,12 @@ export async function updateOracle(
       ethPrice,
     };
   } catch (error: any) {
-    logger.error({ error: error.message }, '❌ Oracle update failed');
+    logger.error({
+      error: error.message,
+      code: error.code,
+      reason: error.reason,
+      data: error.data,
+    }, '❌ Oracle update failed');
     return {
       success: false,
       txHash: '',

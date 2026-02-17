@@ -23,12 +23,22 @@ async function main(): Promise<void> {
   logger.info('═══════════════════════════════════════');
   logger.info('  Auxite Oracle Watcher v1.0.0');
   logger.info('═══════════════════════════════════════');
+  // Derive wallet address for logging
+  let walletAddress = 'N/A';
+  if (CONFIG.privateKey) {
+    try {
+      const { ethers } = await import('ethers');
+      walletAddress = new ethers.Wallet(CONFIG.privateKey).address;
+    } catch { /* ignore */ }
+  }
+
   logger.info({
     pollInterval: `${CONFIG.pollIntervalMs}ms`,
     deviationThreshold: `${CONFIG.deviationThresholdPct}%`,
     anomalyThreshold: `${CONFIG.anomalyThresholdPct}%`,
     oracleAddress: CONFIG.oracleAddress,
     rpcUrl: CONFIG.rpcUrl,
+    walletAddress,
     hasGoldApiKey: !!CONFIG.goldApiKey,
     hasPrivateKey: !!CONFIG.privateKey,
     hasRedisUrl: !!CONFIG.redisUrl,
