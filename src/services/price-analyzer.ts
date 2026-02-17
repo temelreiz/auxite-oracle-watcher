@@ -1,5 +1,6 @@
 /**
  * Price Analyzer — anomaly detection + deviation calculation
+ * All prices in $/oz
  */
 
 import { CONFIG } from '../config';
@@ -23,7 +24,7 @@ export async function analyzePrices(
 ): Promise<AnalysisResult> {
   const anomalies: Anomaly[] = [];
   const deviations: Record<string, number> = {};
-  const metalsToUpdate: string[] = [];
+  let shouldUpdate = false;
 
   const metals = ['gold', 'silver', 'platinum', 'palladium'] as const;
 
@@ -33,33 +34,31 @@ export async function analyzePrices(
     const onChain = onChainPrices[metal];
 
     if (onChain <= 0) {
-      // On-chain price not set yet — always update
       deviations[metal] = 100;
-      metalsToUpdate.push(metal);
+      shouldUpdate = true;
       continue;
     }
 
     const deviation = Math.abs((current - onChain) / onChain) * 100;
-    deviations[metal] = Math.round(deviation * 100) / 100; // 2 decimal places
+    deviations[metal] = Math.round(deviation * 100) / 100;
 
     if (deviation > CONFIG.deviationThresholdPct) {
-      metalsToUpdate.push(metal);
+      shouldUpdate = true;
       logger.info({
         metal,
-        current: current.toFixed(4),
-        onChain: onChain.toFixed(4),
-        deviation: deviation.toFixed(2),
+        current: `$${current.toFixed(2)}`,
+        onChain: `$${onChain.toFixed(2)}`,
+        deviation: `${deviation.toFixed(2)}%`,
       }, `${METAL_NAMES[metal]} exceeds deviation threshold`);
     }
   }
 
-  // ── 2. Spike/crash detection (compare to previous fetch) ──
+  // ── 2. Spike/crash detection ──
   const lastFetch = await getLastFetch();
   if (lastFetch?.prices) {
     for (const metal of metals) {
       const current = currentPrices[metal];
       const previous = lastFetch.prices[metal];
-
       if (previous <= 0) continue;
 
       const changePct = ((current - previous) / previous) * 100;
@@ -71,7 +70,7 @@ export async function analyzePrices(
           type: isSpike ? 'price_spike' : 'price_crash',
           metal,
           severity: 'critical',
-          message: `${METAL_NAMES[metal]} ${isSpike ? 'spiked' : 'crashed'} ${absChange.toFixed(1)}% in one cycle ($${previous.toFixed(2)} → $${current.toFixed(2)}/g)`,
+          message: `${METAL_NAMES[metal]} ${isSpike ? 'spiked' : 'crashed'} ${absChange.toFixed(1)}% ($${previous.toFixed(2)} → $${current.toFixed(2)}/oz)`,
           value: Math.round(changePct * 100) / 100,
         });
       }
@@ -93,19 +92,9 @@ export async function analyzePrices(
     }
   }
 
-  const shouldUpdate = metalsToUpdate.length > 0;
-
   if (shouldUpdate) {
-    logger.info({
-      metalsToUpdate,
-      deviations,
-    }, `${metalsToUpdate.length} metal(s) need oracle update`);
+    logger.info({ deviations }, 'Oracle update needed');
   }
 
-  return {
-    anomalies,
-    deviations,
-    shouldUpdate,
-    metalsToUpdate,
-  };
+  return { anomalies, deviations, shouldUpdate };
 }

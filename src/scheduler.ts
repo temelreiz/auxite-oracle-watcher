@@ -1,12 +1,12 @@
 /**
  * Oracle Watcher Scheduler
  * Main monitoring loop — runs every POLL_INTERVAL_MS (default 90s)
+ * Uses setAllPrices() for single-tx oracle updates
  */
 
 import { CONFIG } from './config';
 import { logger } from './utils/logger';
 
-// Services
 import { fetchPrices } from './services/price-fetcher';
 import { readOraclePrices } from './services/oracle-reader';
 import { updateOracle } from './services/oracle-updater';
@@ -14,6 +14,7 @@ import { analyzePrices } from './services/price-analyzer';
 import { sendAlert, sendAnomalyAlerts } from './services/alert-service';
 import {
   getKillSwitch,
+  setKillSwitch,
   getOverridePrices,
   setLastFetch,
   setLastUpdate,
@@ -48,34 +49,36 @@ async function tick(): Promise<void> {
     // ── 2. Check for override prices ──
     const overridePrices = await getOverridePrices();
 
-    // ── 3. Fetch prices ──
+    // ── 3. Fetch prices ($/oz) ──
     let fetchedPrices: MetalPrices;
+    let ethPrice: number;
     let priceSource: string;
 
     if (overridePrices) {
       fetchedPrices = overridePrices;
+      ethPrice = CONFIG.ethFallbackPrice;
       priceSource = 'override';
       logger.info({ prices: overridePrices }, 'Using override prices');
     } else {
       const fetchResult = await fetchPrices();
       fetchedPrices = fetchResult.prices;
+      ethPrice = fetchResult.ethPrice;
       priceSource = fetchResult.source;
 
-      // Record fetch result
       await setLastFetch({
         timestamp: new Date().toISOString(),
         prices: fetchedPrices,
+        ethPrice,
         source: fetchResult.source,
         errors: fetchResult.errors,
       });
 
-      // If all primary sources failed, alert
       if (fetchResult.source === 'hardcoded' && fetchResult.errors.length > 0) {
         await sendAlert({
           type: 'source_failure',
           severity: 'warning',
           title: 'Oracle: All Price Sources Failed',
-          body: `GoldAPI and metals.live both failed. Using hardcoded fallback prices. Errors: ${fetchResult.errors.join('; ')}`,
+          body: `GoldAPI and metals.live both failed. Using hardcoded fallback. Errors: ${fetchResult.errors.join('; ')}`,
           data: { errors: fetchResult.errors },
         });
       }
@@ -104,22 +107,19 @@ async function tick(): Promise<void> {
       await sendAnomalyAlerts(analysis.anomalies);
     }
 
-    // ── 7. Update oracle if needed (and kill switch is off) ──
+    // ── 7. Update oracle if needed (single tx with setAllPrices) ──
     if (analysis.shouldUpdate && !killSwitchActive) {
-      logger.info({
-        metalsToUpdate: analysis.metalsToUpdate,
-        deviations: analysis.deviations,
-      }, 'Updating oracle prices...');
+      logger.info({ deviations: analysis.deviations }, 'Updating oracle prices...');
 
-      const updateResult = await updateOracle(fetchedPrices, analysis.metalsToUpdate);
+      const updateResult = await updateOracle(fetchedPrices, ethPrice);
 
       if (updateResult.success) {
         await setLastUpdate({
           timestamp: new Date().toISOString(),
-          txHashes: updateResult.txHashes,
-          metals: updateResult.updatedMetals,
+          txHash: updateResult.txHash,
           source: priceSource as any,
           prices: updateResult.prices,
+          ethPrice: updateResult.ethPrice,
         });
         await resetErrorCount();
       } else {
@@ -130,19 +130,18 @@ async function tick(): Promise<void> {
             type: 'update_failure',
             severity: 'critical',
             title: 'Oracle: Update Failed',
-            body: `Oracle blockchain update failed ${errorCount} consecutive times. Error: ${updateResult.error}`,
+            body: `Oracle update failed ${errorCount} consecutive times. Error: ${updateResult.error}`,
             data: { errorCount, error: updateResult.error },
           });
         }
 
-        // Auto-pause after too many errors
         if (errorCount >= CONFIG.maxConsecutiveErrors) {
           await setKillSwitch(true);
           await sendAlert({
             type: 'watcher_error',
             severity: 'critical',
             title: 'Oracle Watcher Auto-Paused',
-            body: `Watcher auto-paused after ${errorCount} consecutive failures. Manual intervention required.`,
+            body: `Auto-paused after ${errorCount} consecutive failures.`,
             data: { errorCount },
           });
         }
@@ -190,34 +189,17 @@ async function tick(): Promise<void> {
       errorCount,
       lastCycleMs: cycleDuration,
     });
-
   } finally {
     isRunning = false;
   }
 }
 
-// ── Private helper (used by auto-pause) ──
-async function setKillSwitch(active: boolean): Promise<void> {
-  const { setKillSwitch: setKS } = await import('./services/redis-state');
-  await setKS(active);
-}
-
-/**
- * Start the scheduler
- */
 export function startScheduler(): void {
   logger.info({ intervalMs: CONFIG.pollIntervalMs }, 'Starting scheduler');
-
-  // Run first tick immediately
   tick();
-
-  // Then repeat on interval
   intervalHandle = setInterval(tick, CONFIG.pollIntervalMs);
 }
 
-/**
- * Stop the scheduler
- */
 export function stopScheduler(): void {
   if (intervalHandle) {
     clearInterval(intervalHandle);
@@ -226,9 +208,6 @@ export function stopScheduler(): void {
   }
 }
 
-/**
- * Force an immediate tick (admin endpoint)
- */
 export async function forceTick(): Promise<void> {
   logger.info('Force tick triggered by admin');
   await tick();

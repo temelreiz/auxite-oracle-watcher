@@ -1,9 +1,10 @@
 /**
  * Oracle Watcher Configuration
  * All environment variables with sensible defaults
+ *
+ * IMPORTANT: AuxiteMetalOracleV2 uses $/oz * 1e6 format (E6 per troy ounce)
+ * NOT per gram, NOT per kg. All prices flow as $/oz.
  */
-
-import { ethers } from 'ethers';
 
 export const CONFIG = {
   // ── Polling ──
@@ -29,20 +30,11 @@ export const CONFIG = {
   privateKey: process.env.PRIVATE_KEY || '',
   oracleAddress: process.env.ORACLE_ADDRESS || '0xbB109166062D718756D0389F4bA2aB02A36F296c',
 
-  // ── Oracle Contract ABI (matches wallet app) ──
+  // ── Oracle Contract ABI (AuxiteMetalOracleV2) ──
   oracleAbi: [
-    'function updatePrice(bytes32 metalId, uint256 priceE6) external',
-    'function getBasePerKgE6(bytes32 metalId) external view returns (uint256)',
-    'function getETHPriceE6() view returns (uint256)',
+    'function setAllPrices(uint256 _goldPrice, uint256 _silverPrice, uint256 _platinumPrice, uint256 _palladiumPrice, uint256 _ethPrice) external',
+    'function getAllPrices() external view returns (uint256 goldPrice, uint256 silverPrice, uint256 platinumPrice, uint256 palladiumPrice, uint256 ethPrice, uint256 lastUpdated)',
   ],
-
-  // ── Metal IDs (ethers.id hashes, matching wallet oracle-updater.ts) ──
-  metalIds: {
-    GOLD: ethers.id('GOLD'),
-    SILVER: ethers.id('SILVER'),
-    PLATINUM: ethers.id('PLATINUM'),
-    PALLADIUM: ethers.id('PALLADIUM'),
-  },
 
   // ── Metal symbol mapping ──
   goldApiSymbols: {
@@ -51,8 +43,6 @@ export const CONFIG = {
     XPT: 'platinum',
     XPD: 'palladium',
   } as Record<string, string>,
-
-  troyOunceToGrams: 31.1035,
 
   // ── Redis ──
   redisUrl: process.env.UPSTASH_REDIS_REST_URL || '',
@@ -69,19 +59,14 @@ export const CONFIG = {
   // ── Alert cooldown ──
   alertCooldownSeconds: 300, // 5 minutes
 
-  // ── Fallback prices ($/gram, Feb 2026) ──
-  fallbackPrices: {
-    gold: 162.4,
-    silver: 2.86,
-    platinum: 73.3,
-    palladium: 58.5,
-  },
-
   // ── Fallback prices ($/oz) ──
-  fallbackPricesOz: {
+  fallbackPrices: {
     gold: 5050,
     silver: 89,
     platinum: 2280,
     palladium: 1820,
   },
-} as const;
+
+  // ── ETH fallback ──
+  ethFallbackPrice: 2500,
+};

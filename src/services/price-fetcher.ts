@@ -1,29 +1,28 @@
 /**
  * Multi-Source Price Fetcher
  * Fallback chain: GoldAPI → metals.live → Redis stale → Hardcoded
+ *
+ * All prices returned as $/oz (troy ounce) — matching oracle daemon format
  */
 
 import { CONFIG } from '../config';
 import { logger } from '../utils/logger';
 import { getStalePrices, updateSharedPriceCache } from './redis-state';
-import type { MetalPrices, FetchResult, PriceSource } from '../types';
-
-const TROY_OZ = CONFIG.troyOunceToGrams;
+import type { MetalPrices, FetchResult } from '../types';
 
 // ════════════════════════════════════════
-// Source 1: GoldAPI (primary)
+// Source 1: GoldAPI (primary) — returns $/oz
 // ════════════════════════════════════════
 
-async function fetchFromGoldApi(): Promise<{ prices: MetalPrices; pricesOz: MetalPrices }> {
+async function fetchFromGoldApi(): Promise<{ prices: MetalPrices; ethPrice: number }> {
   if (!CONFIG.goldApiKey) {
     throw new Error('GOLDAPI_KEY not set');
   }
 
   const symbols = ['XAU', 'XAG', 'XPT', 'XPD'];
-  const pricesOz: Record<string, number> = {};
+  const prices: Record<string, number> = {};
 
   for (const symbol of symbols) {
-    // Rate limit between requests
     if (symbol !== 'XAU') {
       await new Promise(r => setTimeout(r, CONFIG.goldApiRateDelayMs));
     }
@@ -35,13 +34,8 @@ async function fetchFromGoldApi(): Promise<{ prices: MetalPrices; pricesOz: Meta
       },
     });
 
-    if (res.status === 429) {
-      throw new Error('GoldAPI rate limited');
-    }
-
-    if (!res.ok) {
-      throw new Error(`GoldAPI ${symbol}: HTTP ${res.status}`);
-    }
+    if (res.status === 429) throw new Error('GoldAPI rate limited');
+    if (!res.ok) throw new Error(`GoldAPI ${symbol}: HTTP ${res.status}`);
 
     const data = await res.json() as { price?: number };
     if (!data.price || data.price <= 0) {
@@ -49,17 +43,24 @@ async function fetchFromGoldApi(): Promise<{ prices: MetalPrices; pricesOz: Meta
     }
 
     const metalKey = CONFIG.goldApiSymbols[symbol];
-    pricesOz[metalKey] = data.price;
+    prices[metalKey] = data.price;
+  }
+
+  // Fetch ETH price from CoinGecko
+  let ethPrice = CONFIG.ethFallbackPrice;
+  try {
+    const ethRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd');
+    if (ethRes.ok) {
+      const ethData = await ethRes.json() as { ethereum?: { usd?: number } };
+      ethPrice = ethData.ethereum?.usd || CONFIG.ethFallbackPrice;
+    }
+  } catch {
+    logger.warn('CoinGecko ETH fetch failed, using fallback');
   }
 
   return {
-    pricesOz: pricesOz as unknown as MetalPrices,
-    prices: {
-      gold: pricesOz.gold / TROY_OZ,
-      silver: pricesOz.silver / TROY_OZ,
-      platinum: pricesOz.platinum / TROY_OZ,
-      palladium: pricesOz.palladium / TROY_OZ,
-    },
+    prices: prices as unknown as MetalPrices,
+    ethPrice,
   };
 }
 
@@ -67,46 +68,38 @@ async function fetchFromGoldApi(): Promise<{ prices: MetalPrices; pricesOz: Meta
 // Source 2: api.metals.live (free, no key)
 // ════════════════════════════════════════
 
-async function fetchFromMetalsLive(): Promise<{ prices: MetalPrices; pricesOz: MetalPrices }> {
+async function fetchFromMetalsLive(): Promise<{ prices: MetalPrices; ethPrice: number }> {
   const res = await fetch(CONFIG.metalsLiveUrl, {
     headers: { 'Accept': 'application/json' },
   });
 
-  if (!res.ok) {
-    throw new Error(`metals.live: HTTP ${res.status}`);
-  }
+  if (!res.ok) throw new Error(`metals.live: HTTP ${res.status}`);
 
-  const data = await res.json();
-
-  // metals.live returns: [{ gold: 5050 }, { silver: 89 }, ...]
-  // or: [{ metal: "gold", price: 5050 }, ...]
-  const pricesOz: Record<string, number> = {};
+  const data = await res.json() as any[];
+  const prices: Record<string, number> = {};
 
   if (Array.isArray(data)) {
     for (const item of data) {
-      if (item.gold) pricesOz.gold = item.gold;
-      else if (item.silver) pricesOz.silver = item.silver;
-      else if (item.platinum) pricesOz.platinum = item.platinum;
-      else if (item.palladium) pricesOz.palladium = item.palladium;
-      // Alternative format
+      if (item.gold) prices.gold = item.gold;
+      else if (item.silver) prices.silver = item.silver;
+      else if (item.platinum) prices.platinum = item.platinum;
+      else if (item.palladium) prices.palladium = item.palladium;
       if (item.metal && item.price) {
-        pricesOz[item.metal.toLowerCase()] = item.price;
+        prices[item.metal.toLowerCase()] = item.price;
       }
     }
   }
 
-  if (!pricesOz.gold) {
-    throw new Error('metals.live: no gold price found');
-  }
+  if (!prices.gold) throw new Error('metals.live: no gold price found');
 
   return {
-    pricesOz: pricesOz as unknown as MetalPrices,
     prices: {
-      gold: (pricesOz.gold || CONFIG.fallbackPricesOz.gold) / TROY_OZ,
-      silver: (pricesOz.silver || CONFIG.fallbackPricesOz.silver) / TROY_OZ,
-      platinum: (pricesOz.platinum || CONFIG.fallbackPricesOz.platinum) / TROY_OZ,
-      palladium: (pricesOz.palladium || CONFIG.fallbackPricesOz.palladium) / TROY_OZ,
+      gold: prices.gold || CONFIG.fallbackPrices.gold,
+      silver: prices.silver || CONFIG.fallbackPrices.silver,
+      platinum: prices.platinum || CONFIG.fallbackPrices.platinum,
+      palladium: prices.palladium || CONFIG.fallbackPrices.palladium,
     },
+    ethPrice: CONFIG.ethFallbackPrice,
   };
 }
 
@@ -120,23 +113,12 @@ export async function fetchPrices(): Promise<FetchResult> {
 
   // Source 1: GoldAPI
   try {
-    logger.debug('Trying GoldAPI...');
     const result = await fetchFromGoldApi();
     const duration = Date.now() - startTime;
-
     logger.info({ source: 'goldapi', duration, gold: result.prices.gold.toFixed(2) },
-      'Prices fetched from GoldAPI');
-
-    // Write to shared cache
+      'Prices fetched from GoldAPI ($/oz)');
     await updateSharedPriceCache(result.prices);
-
-    return {
-      prices: result.prices,
-      pricesOz: result.pricesOz,
-      source: 'goldapi',
-      fetchDurationMs: duration,
-      errors,
-    };
+    return { prices: result.prices, ethPrice: result.ethPrice, source: 'goldapi', fetchDurationMs: duration, errors };
   } catch (error: any) {
     errors.push(`GoldAPI: ${error.message}`);
     logger.warn({ error: error.message }, 'GoldAPI failed, trying metals.live');
@@ -144,22 +126,11 @@ export async function fetchPrices(): Promise<FetchResult> {
 
   // Source 2: metals.live
   try {
-    logger.debug('Trying metals.live...');
     const result = await fetchFromMetalsLive();
     const duration = Date.now() - startTime;
-
-    logger.info({ source: 'metals-live', duration, gold: result.prices.gold.toFixed(2) },
-      'Prices fetched from metals.live');
-
+    logger.info({ source: 'metals-live', duration }, 'Prices fetched from metals.live ($/oz)');
     await updateSharedPriceCache(result.prices);
-
-    return {
-      prices: result.prices,
-      pricesOz: result.pricesOz,
-      source: 'metals-live',
-      fetchDurationMs: duration,
-      errors,
-    };
+    return { prices: result.prices, ethPrice: result.ethPrice, source: 'metals-live', fetchDurationMs: duration, errors };
   } catch (error: any) {
     errors.push(`metals.live: ${error.message}`);
     logger.warn({ error: error.message }, 'metals.live failed, trying stale cache');
@@ -170,22 +141,8 @@ export async function fetchPrices(): Promise<FetchResult> {
     const stale = await getStalePrices();
     if (stale && stale.gold > 0) {
       const duration = Date.now() - startTime;
-
-      logger.warn({ source: 'redis-stale', duration },
-        'Using stale Redis prices');
-
-      return {
-        prices: stale,
-        pricesOz: {
-          gold: stale.gold * TROY_OZ,
-          silver: stale.silver * TROY_OZ,
-          platinum: stale.platinum * TROY_OZ,
-          palladium: stale.palladium * TROY_OZ,
-        },
-        source: 'redis-stale',
-        fetchDurationMs: duration,
-        errors,
-      };
+      logger.warn({ source: 'redis-stale', duration }, 'Using stale Redis prices');
+      return { prices: stale, ethPrice: CONFIG.ethFallbackPrice, source: 'redis-stale', fetchDurationMs: duration, errors };
     }
   } catch (error: any) {
     errors.push(`Redis stale: ${error.message}`);
@@ -194,10 +151,9 @@ export async function fetchPrices(): Promise<FetchResult> {
   // Source 4: Hardcoded fallback
   const duration = Date.now() - startTime;
   logger.error({ errors }, 'All sources failed, using hardcoded fallback');
-
   return {
     prices: { ...CONFIG.fallbackPrices },
-    pricesOz: { ...CONFIG.fallbackPricesOz },
+    ethPrice: CONFIG.ethFallbackPrice,
     source: 'hardcoded',
     fetchDurationMs: duration,
     errors,

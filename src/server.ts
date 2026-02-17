@@ -128,9 +128,9 @@ app.get('/status', async (req, res) => {
       lastCycleMs: status.lastCycleMs,
       lastUpdate: lastUpdate ? {
         timestamp: lastUpdate.timestamp,
-        metals: lastUpdate.metals,
+        prices: lastUpdate.prices,
         source: lastUpdate.source,
-        txHashes: lastUpdate.txHashes,
+        txHash: lastUpdate.txHash,
       } : null,
       lastFetch: lastFetch ? {
         timestamp: lastFetch.timestamp,

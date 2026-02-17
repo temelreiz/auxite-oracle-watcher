@@ -1,24 +1,20 @@
 /**
  * Shared TypeScript interfaces for Oracle Watcher
+ *
+ * IMPORTANT: All MetalPrices are in $/oz (troy ounce), matching
+ * AuxiteMetalOracleV2's E6 format: price * 1e6
  */
 
 export interface MetalPrices {
-  gold: number;
-  silver: number;
-  platinum: number;
-  palladium: number;
-}
-
-export interface MetalPricesOz {
-  gold: number;
-  silver: number;
-  platinum: number;
-  palladium: number;
+  gold: number;      // $/oz
+  silver: number;    // $/oz
+  platinum: number;  // $/oz
+  palladium: number; // $/oz
 }
 
 export interface FetchResult {
-  prices: MetalPrices;           // $/gram
-  pricesOz: MetalPricesOz;       // $/oz (raw)
+  prices: MetalPrices;       // $/oz
+  ethPrice: number;          // $/ETH
   source: PriceSource;
   fetchDurationMs: number;
   errors: string[];
@@ -30,7 +26,6 @@ export interface AnalysisResult {
   anomalies: Anomaly[];
   deviations: Record<string, number>;  // per-metal deviation %
   shouldUpdate: boolean;
-  metalsToUpdate: string[];
 }
 
 export interface Anomaly {
@@ -43,12 +38,9 @@ export interface Anomaly {
 
 export interface UpdateResult {
   success: boolean;
-  txHashes: string[];
-  updatedMetals: string[];
-  prices: {
-    base: MetalPrices;
-    withSpread: MetalPrices;
-  };
+  txHash: string;
+  prices: MetalPrices;
+  ethPrice: number;
   error?: string;
 }
 
@@ -71,18 +63,16 @@ export interface WatcherStatus {
 
 export interface LastUpdateRecord {
   timestamp: string;
-  txHashes: string[];
-  metals: string[];
+  txHash: string;
   source: PriceSource;
-  prices: {
-    base: MetalPrices;
-    withSpread: MetalPrices;
-  };
+  prices: MetalPrices;
+  ethPrice: number;
 }
 
 export interface LastFetchRecord {
   timestamp: string;
   prices: MetalPrices;
+  ethPrice: number;
   source: PriceSource;
   errors: string[];
 }
