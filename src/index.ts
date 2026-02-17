@@ -7,9 +7,19 @@ import { CONFIG } from './config';
 import { logger } from './utils/logger';
 import { startServer } from './server';
 import { startScheduler, stopScheduler } from './scheduler';
-import { setStatus } from './services/redis-state';
 
 async function main(): Promise<void> {
+  // Debug: log ALL env vars that start with UPSTASH, GOLD, PRIVATE (masked)
+  logger.info({
+    envKeys: Object.keys(process.env).filter(k =>
+      k.includes('UPSTASH') || k.includes('GOLD') || k.includes('PRIVATE') || k.includes('REDIS')
+    ),
+    UPSTASH_REDIS_REST_URL: process.env.UPSTASH_REDIS_REST_URL ? `${process.env.UPSTASH_REDIS_REST_URL.substring(0, 20)}...` : 'MISSING',
+    UPSTASH_REDIS_REST_TOKEN: process.env.UPSTASH_REDIS_REST_TOKEN ? `${process.env.UPSTASH_REDIS_REST_TOKEN.substring(0, 10)}...` : 'MISSING',
+    GOLDAPI_KEY: process.env.GOLDAPI_KEY ? `${process.env.GOLDAPI_KEY.substring(0, 10)}...` : 'MISSING',
+    PRIVATE_KEY: process.env.PRIVATE_KEY ? 'SET' : 'MISSING',
+  }, 'ENV DEBUG');
+
   logger.info('═══════════════════════════════════════');
   logger.info('  Auxite Oracle Watcher v1.0.0');
   logger.info('═══════════════════════════════════════');
@@ -21,34 +31,51 @@ async function main(): Promise<void> {
     rpcUrl: CONFIG.rpcUrl,
     hasGoldApiKey: !!CONFIG.goldApiKey,
     hasPrivateKey: !!CONFIG.privateKey,
+    hasRedisUrl: !!CONFIG.redisUrl,
+    hasRedisToken: !!CONFIG.redisToken,
   }, 'Configuration loaded');
 
-  // Set initial status
-  await setStatus({
-    state: 'running',
-    uptimeStart: new Date().toISOString(),
-    errorCount: 0,
-    lastCycleMs: 0,
-  });
-
-  // Start HTTP server (Railway health check needs this)
+  // Start HTTP server FIRST (Railway needs health check even if Redis is down)
   await startServer();
+  logger.info('HTTP server started');
+
+  // Only start scheduler if Redis is configured
+  if (!CONFIG.redisUrl || !CONFIG.redisToken) {
+    logger.error('Redis not configured — scheduler will not start. Waiting for env vars...');
+    // Keep server running for health checks
+    return;
+  }
+
+  // Try to set initial status (don't crash if Redis fails)
+  try {
+    const { setStatus } = await import('./services/redis-state');
+    await setStatus({
+      state: 'running',
+      uptimeStart: new Date().toISOString(),
+      errorCount: 0,
+      lastCycleMs: 0,
+    });
+  } catch (err: any) {
+    logger.error({ error: err.message }, 'Failed to set initial Redis status — continuing anyway');
+  }
 
   // Start price monitoring scheduler
   startScheduler();
-
   logger.info('Oracle Watcher is running');
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutting down...');
     stopScheduler();
-    await setStatus({
-      state: 'stopped',
-      uptimeStart: '',
-      errorCount: 0,
-      lastCycleMs: 0,
-    });
+    try {
+      const { setStatus } = await import('./services/redis-state');
+      await setStatus({
+        state: 'stopped',
+        uptimeStart: '',
+        errorCount: 0,
+        lastCycleMs: 0,
+      });
+    } catch { /* ignore */ }
     process.exit(0);
   };
 
@@ -57,6 +84,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  logger.fatal({ error: err.message }, 'Fatal error — exiting');
-  process.exit(1);
+  console.error('FATAL:', err);
+  // Don't exit immediately — let Railway see the logs
+  setTimeout(() => process.exit(1), 5000);
 });
